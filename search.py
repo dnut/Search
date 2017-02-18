@@ -1,6 +1,7 @@
 import json
 import re
 from urllib.request import urlopen
+from urllib.parse import quote_plus as urlencode
 from pprint import pprint
 import html
 from myerror import PageNotFoundError
@@ -12,7 +13,6 @@ class Search:
 
 	def details(self, i):
 		""" detailed info for one result """
-		#if isinstance(self.results[i], tuple):
 		try:
 			return '{}: {}\n{}\n{}'.format(
 				i + 1,
@@ -74,15 +74,20 @@ class Google(Search):
 		)
 
 	def api_search(self, search_string):
-		query = '+'.join(search_string.split())
+		query = urlencode(search_string)
 		response = self.svc.cse().list(
 			q=query,
 			cx='redacted',
 		).execute()
+		if not int(response['queries']['request'][0]['totalResults']):
+			raise PageNotFoundError(search_string, 'There are no results for')
 		return response['items']
 
 	def search(self, query):
-		self.results = self.api_search(query)
+		try:
+			self.results = self.api_search(query)
+		except PageNotFoundError as e:
+			return str(e)
 		return self.summary()
 
 
