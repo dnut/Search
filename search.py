@@ -11,34 +11,55 @@ class Search:
 		self.first = 3
 
 	def details(self, i):
-		return '{}: {}\n{}\n{}'.format(
-			i + 1,
-			self.results[i]['title'],
-			self.results[i]['link'],
-			self.results[i]['snippet']
-		)
+		""" detailed info for one result """
+		#if isinstance(self.results[i], tuple):
+		try:
+			return '{}: {}\n{}\n{}'.format(
+				i + 1,
+				self.results[i]['title'],
+				self.results[i]['link'],
+				self.results[i]['snippet']
+			)
+		except KeyError as e:
+			if str(e) == '\'snippet\'':
+				return self.search(self.results[i]['title'])
+			else:
+				raise
+
+	def brief(self, i):
+		""" brief info for one result """
+		res = self.results[i]
+		return '{}: {} - {}'.format(str(i + 1), res['title'], res['link'])
 
 	def summary(self):
-		ret = [self.details(0)]
-		for i in range(1, min(len(self.results), self.first)):
-			ret.append(str(i+1) + ': ' + self.results[i]['title'])
-		return '\n'.join(ret)
+		""" brief overview for all results """
+		r = [self.brief(i) for i in range(1, min(len(self.results), self.first))]
+		return '\n'.join([self.details(0)] + r)
 
 	def more(self):
+		""" continued info for all results """
 		ret = []
 		if len(self.results) <= self.first:
 			return 'No more results.'
 		for i in range(self.first, len(self.results)):
-			ret.append(str(i+1) + ': ' + self.results[i]['title'])
+			ret.append(self.brief(i))
 		return '\n'.join(ret)
 
 	def complete(self):
+		""" detailed info for all results """
 		ret = ()
 		for i, result in enumerate(self.results):
+			try:
+				snippet = self.results[i]['snippet']
+			except KeyError as e:
+				if str(e) == '\'snippet\'':
+					snippet = ''
+				else:
+					raise
 			ret += (
 				'[' + str(i+1) + '] - ' + self.results[i]['title'],
 				self.results[i]['link'],
-				self.results[i]['snippet']
+				
 			)
 		return '\n'.join(ret)
 
@@ -88,13 +109,32 @@ class Wikipedia(Search):
 		(k, v), = data['query']['pages'].items()
 		return v['revisions'][0]['*']
 
-	def is_redirect(self, title):
-		return self.markup(title)[:9] == '#REDIRECT'
+	def is_redirect(self, title, markup=None):
+		if not markup:
+			markup = self.markup(title)
+		return markup[:9] == '#REDIRECT'
 
-	def get_redirect(self, title):
+	def is_disambig(self, title, markup=None):
+		if not markup:
+			markup = self.markup(title)
+		return bool(re.search(r'{{disambig(uation)?}}', markup))
+
+	def get_redirect(self, title, markup=None):
+		if not markup:
+			markup = self.markup(title)
 		return self.search(
-			re.search(r'\[\[([^]]*)\]\]', self.markup(title)).expand(r'\1')
+			re.search(r'\[\[([^]]*)\]\]', markup).expand(r'\1')
 		)
+
+	def get_links(self, title, markup=None):
+		if not markup:
+			markup = self.markup(title)
+		link = re.compile(r'\[\[([^]|]*)\]\]|\[\[([^]|]*)\|[^]|]*\]\]')
+		ret = []
+		for p in link.findall(markup):
+			subtitle = [i for i in p if i][0]
+			ret.append({'title': subtitle, 'link': self.url(subtitle)})
+		return ret
 
 	def article(self, title):
 		""" Finds page with title, returns string in format:
@@ -103,15 +143,29 @@ class Wikipedia(Search):
 		introduction to article (plain text)'
 		"""
 		data = self.data(title, 'api', 'article')
+		try:
+			markup = self.markup(title)
+		except KeyError:
+			pass
 		(k, v), = data['query']['pages'].items()
 		if k == '-1':
 			raise PageNotFoundError(title)
-		elif len(v['extract']) == 0 and self.is_redirect(title):
-			return self.get_redirect(title)
+		elif self.is_redirect(title, markup):
+			return self.get_redirect(title, markup)
 		article = (v['title'], self.url(v['title']), v['extract'])
-		self.list_search(title, True)
-		self.first = 1
-		return '{}\n{}\n{}'.format(*article)
+		if self.is_disambig(title, markup):
+			self.results = self.get_links(title, markup)
+			for i, j in enumerate(self.results):
+				article += (self.brief(i),)
+				if i == 2: break
+			self.first = 3
+		else:
+			# Set up other search results
+			self.list_search(title, True)
+			self.first = 1
+		if len(self.results) > self.first:
+			article += ('-- NOTE: Use !m for more. --',)
+		return '\n'.join(article)
 
 	def list_search(self, title, force=False):
 		data = self.data(title, 'api', 'search')
